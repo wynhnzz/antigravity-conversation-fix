@@ -40,6 +40,90 @@ from urllib.parse import quote, unquote
 _SYSTEM = platform.system()
 
 
+def is_wsl():
+    if platform.system() != "Linux":
+        return False
+    if "microsoft" in platform.release().lower():
+        return True
+    try:
+        with open("/proc/version", "r") as f:
+            if "microsoft" in f.read().lower():
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def get_wsl_windows_appdata():
+    try:
+        proc = subprocess.run(
+            ['cmd.exe', '/c', 'echo %APPDATA%'],
+            capture_output=True, text=True, check=True
+        )
+        win_path = proc.stdout.strip()
+        if win_path and win_path != "%APPDATA%":
+            proc_wsl = subprocess.run(
+                ['wslpath', win_path],
+                capture_output=True, text=True, check=True
+            )
+            wsl_path = proc_wsl.stdout.strip()
+            if os.path.exists(wsl_path):
+                return wsl_path
+    except Exception:
+        pass
+
+    if os.path.exists("/mnt/c/Users"):
+        try:
+            for user in os.listdir("/mnt/c/Users"):
+                if user in ("Default", "Default User", "All Users", "desktop.ini", "Public"):
+                    continue
+                path = os.path.join("/mnt/c/Users", user, "AppData", "Roaming")
+                if os.path.exists(path):
+                    if (os.path.exists(os.path.join(path, "Antigravity IDE")) or 
+                            os.path.exists(os.path.join(path, "antigravity")) or
+                            os.path.exists(os.path.join(path, "Antigravity"))):
+                        return path
+        except Exception:
+            pass
+
+        # Try to get Windows username via cmd.exe
+        try:
+            proc = subprocess.run(
+                ['cmd.exe', '/c', 'echo %USERNAME%'],
+                capture_output=True, text=True, check=True
+            )
+            win_user = proc.stdout.strip()
+            if win_user and win_user != "%USERNAME%":
+                path = os.path.join("/mnt/c/Users", win_user, "AppData", "Roaming")
+                if os.path.exists(path):
+                    return path
+        except Exception:
+            pass
+
+        # Try to get WSL/Linux username environment variable as a fallback
+        try:
+            linux_user = os.environ.get("USER") or os.environ.get("USERNAME")
+            if linux_user:
+                path = os.path.join("/mnt/c/Users", linux_user, "AppData", "Roaming")
+                if os.path.exists(path):
+                    return path
+        except Exception:
+            pass
+
+        # Grab the first non-system user folder in Users directory
+        try:
+            for user in os.listdir("/mnt/c/Users"):
+                if user in ("Default", "Default User", "All Users", "desktop.ini", "Public"):
+                    continue
+                path = os.path.join("/mnt/c/Users", user, "AppData", "Roaming")
+                if os.path.exists(path):
+                    return path
+        except Exception:
+            pass
+
+    return None
+
+
 def _first_existing(*candidates):
     """Return the first path that exists on disk, or the first candidate if none exist."""
     for p in candidates:
@@ -66,6 +150,32 @@ if _SYSTEM == "Windows":
         os.path.join(_appdata, "Antigravity IDE", "User", "workspaceStorage"),
         os.path.join(_appdata, "antigravity", "User", "workspaceStorage"),
     )
+elif is_wsl():
+    _wsl_appdata = get_wsl_windows_appdata()
+    _home = os.path.expanduser("~")
+
+    if _wsl_appdata:
+        DB_PATH = _first_existing(
+            os.path.join(_wsl_appdata, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
+            os.path.join(_wsl_appdata, "antigravity", "User", "globalStorage", "state.vscdb"),
+            os.path.join(_wsl_appdata, "Antigravity", "User", "globalStorage", "state.vscdb"),
+        )
+        WORKSPACE_STORAGE_DIR = _first_existing(
+            os.path.join(_wsl_appdata, "Antigravity IDE", "User", "workspaceStorage"),
+            os.path.join(_wsl_appdata, "antigravity", "User", "workspaceStorage"),
+            os.path.join(_wsl_appdata, "Antigravity", "User", "workspaceStorage"),
+        )
+    else:
+        DB_PATH = ""
+        WORKSPACE_STORAGE_DIR = ""
+
+    CONVERSATIONS_DIR = _first_existing(
+        os.path.join(_home, ".gemini", "antigravity", "conversations"),
+    )
+    BRAIN_DIR = _first_existing(
+        os.path.join(_home, ".gemini", "antigravity", "brain"),
+    )
+
 elif _SYSTEM == "Darwin":  # macOS
     _home = os.path.expanduser("~")
     _support = os.path.join(_home, "Library", "Application Support")
@@ -203,6 +313,14 @@ def path_to_workspace_uri(folder_path):
     if _is_remote_uri(folder_path):
         return folder_path
 
+    # If running in WSL and path starts with /mnt/<drive>/
+    if is_wsl() and folder_path.startswith("/mnt/"):
+        parts = folder_path.split("/")
+        if len(parts) >= 3 and len(parts[2]) == 1:
+            drive = parts[2].lower()
+            rest = "/".join(parts[3:])
+            return f"file:///{drive}:{rest}"
+
     p = folder_path.replace("\\", "/")
     if len(p) >= 2 and p[1] == ":":
         drive = p[0].lower()
@@ -311,6 +429,9 @@ def _uri_to_local_path(file_uri):
     # On Windows, file:///C:/... -> C:/...
     if _SYSTEM == "Windows" and len(raw) >= 3 and raw[0] == '/' and raw[2] == ':':
         raw = raw[1:]  # strip leading /
+    elif is_wsl() and len(raw) >= 3 and raw[0] == '/' and raw[2] == ':':
+        drive = raw[1].lower()
+        raw = f"/mnt/{drive}{raw[3:]}"
     return raw
 
 
@@ -390,10 +511,18 @@ def infer_workspace_from_brain(conversation_id, known_ws_uris=None):
         raw = file_uri[len("file:///"):]
         raw = raw.replace("%3A", ":").replace("%3a", ":")
         raw = raw.replace("%20", " ")
+
+        # If WSL, normalize Windows-style drive letters in URIs to /mnt/ paths
+        if is_wsl() and len(raw) >= 2 and raw[1] == ':':
+            drive = raw[0].lower()
+            raw = f"mnt/{drive}/{raw[3:]}"
+
         parts = raw.replace("\\", "/").split("/")
         # On Windows paths like C:/Users/name/Desktop/Project → 5 segments.
         # On Linux/Mac like home/user/projects/Project → 4 segments + re-add /.
         if _SYSTEM == "Windows":
+            depth = 5
+        elif is_wsl() and raw.startswith("mnt/"):
             depth = 5
         else:
             depth = 4
@@ -464,6 +593,13 @@ def _prompt_valid_folder(prompt_text):
         if _is_remote_uri(folder):
             print(f"    + Mapped remote URI: {folder}")
             return folder
+
+        # Normalize Windows path to WSL mount path if running in WSL
+        if is_wsl() and len(folder) >= 2 and folder[1] == ':':
+            drive = folder[0].lower()
+            rest = folder[2:].replace('\\', '/')
+            folder = f"/mnt/{drive}{rest}"
+
         if os.path.isdir(folder):
             print(f"    + Mapped to {folder}")
             return folder
@@ -522,6 +658,13 @@ def interactive_workspace_assignment(unmapped_entries):
                 print(f"    + Mapped remote URI: {folder}")
                 assignments[cid] = folder
                 break
+
+            # Normalize Windows path to WSL mount path if running in WSL
+            if is_wsl() and len(folder) >= 2 and folder[1] == ':':
+                drive = folder[0].lower()
+                rest = folder[2:].replace('\\', '/')
+                folder = f"/mnt/{drive}{rest}"
+
             if os.path.isdir(folder):
                 print(f"    + Mapped to {folder}")
                 assignments[cid] = folder
@@ -728,8 +871,9 @@ def main():
     print("=" * 62)
     print()
 
-    # ── Check if Antigravity is running (Windows only) ────────────────────
+    # ── Check if Antigravity is running ───────────────────────────────────
 
+    is_running = False
     if _SYSTEM == "Windows":
         try:
             result = subprocess.run(
@@ -737,17 +881,30 @@ def main():
                 capture_output=True, text=True, creationflags=0x08000000
             )
             if 'antigravity.exe' in result.stdout.lower():
-                print("  WARNING: Antigravity is still running!")
-                print()
-                print("  The fix will NOT work correctly while Antigravity is open.")
-                print("  Please close it first: File > Exit, or kill from Task Manager.")
-                print()
-                choice = input("  Close Antigravity and press Enter to continue (or type Q to quit): ")
-                if choice.strip().lower() == 'q':
-                    return 1
-                print()
+                is_running = True
         except Exception:
             pass
+    elif is_wsl():
+        # Check both host Windows process and local Linux processes
+        try:
+            result = subprocess.run(
+                ['tasklist.exe', '/FI', 'IMAGENAME eq antigravity.exe'],
+                capture_output=True, text=True
+            )
+            if 'antigravity.exe' in result.stdout.lower():
+                is_running = True
+        except Exception:
+            pass
+        if not is_running:
+            try:
+                result = subprocess.run(
+                    ['pgrep', '-f', 'antigravity'],
+                    capture_output=True, text=True
+                )
+                if result.stdout.strip():
+                    is_running = True
+            except Exception:
+                pass
     else:
         # Linux / macOS: check for antigravity process
         try:
@@ -756,15 +913,20 @@ def main():
                 capture_output=True, text=True
             )
             if result.stdout.strip():
-                print("  WARNING: Antigravity may still be running!")
-                print("  Please close it before proceeding.")
-                print()
-                choice = input("  Press Enter to continue anyway (or type Q to quit): ")
-                if choice.strip().lower() == 'q':
-                    return 1
-                print()
+                is_running = True
         except Exception:
             pass
+
+    if is_running:
+        print("  WARNING: Antigravity may still be running!")
+        print()
+        print("  The fix will NOT work correctly while Antigravity is open.")
+        print("  Please close it first: File > Exit, or kill it.")
+        print()
+        choice = input("  Press Enter to continue anyway (or type Q to quit): ")
+        if choice.strip().lower() == 'q':
+            return 1
+        print()
 
     # ── Validate paths ──────────────────────────────────────────────────────
 
@@ -957,9 +1119,13 @@ def main():
     print("  " + "=" * 58)
     print()
     print("  NEXT STEPS:")
-    print("    1. Make sure Antigravity is fully closed")
-    print("    2. REBOOT your PC (full restart, not just app restart)")
-    print("    3. Open Antigravity — conversations should appear sorted by date")
+    if is_wsl():
+        print("    1. Make sure Antigravity is fully closed in Windows")
+        print("    2. Open Antigravity — conversations should appear sorted by date")
+    else:
+        print("    1. Make sure Antigravity is fully closed")
+        print("    2. REBOOT your PC (full restart, not just app restart)")
+        print("    3. Open Antigravity — conversations should appear sorted by date")
     print()
     input("  Press Enter to close...")
     return 0
