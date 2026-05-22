@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Antigravity Conversation Fix  (v1.05)
+Antigravity Conversation Fix  (v1.06)
 =============================
 Rebuilds the Antigravity conversation index so all your chat history
 appears correctly — sorted by date (newest first) with proper titles.
@@ -10,7 +10,9 @@ Fixes:
   - Wrong ordering (not sorted by date)
   - Missing/placeholder titles
   - Workspace assignments stripped or lost
-  - Missing timestamps causing sort issues
+  - Migrate chat history from old ~/.gemini/antigravity/ to new antigravity-ide/
+  - Restore chats from antigravity-backup/ when missing from old and new folders
+  - Rebuild sidebar index from all folders (new + old + backup)
 
 Usage:
   1. CLOSE Antigravity completely (File > Exit, or kill from Task Manager)
@@ -55,6 +57,7 @@ import base64
 import json
 import re
 import time
+import shutil
 import subprocess
 import platform
 from urllib.parse import quote, unquote
@@ -63,6 +66,10 @@ from urllib.parse import quote, unquote
 # Antigravity was renamed to "Antigravity IDE" in a recent update.
 # We check the new name first, then fall back to the old name so the tool
 # works on both old and new installations.
+#
+# Conversation/brain data moved from ~/.gemini/antigravity/ to
+# ~/.gemini/antigravity-ide/ in a newer release. Antigravity may also keep
+# a copy under ~/.gemini/antigravity-backup/ during upgrades.
 
 _SYSTEM = platform.system()
 _ANTIGRAVITY_NAMES = ("Antigravity IDE", "antigravity", "Antigravity")
@@ -138,20 +145,56 @@ def _first_existing(*candidates):
     return candidates[0]
 
 
+def _gemini_data_paths(gemini_root):
+    """Return legacy, backup, and new Antigravity data directory paths under ~/.gemini/."""
+    return {
+        "legacy_conv": os.path.join(gemini_root, "antigravity", "conversations"),
+        "backup_conv": os.path.join(gemini_root, "antigravity-backup", "conversations"),
+        "new_conv": os.path.join(gemini_root, "antigravity-ide", "conversations"),
+        "legacy_brain": os.path.join(gemini_root, "antigravity", "brain"),
+        "backup_brain": os.path.join(gemini_root, "antigravity-backup", "brain"),
+        "new_brain": os.path.join(gemini_root, "antigravity-ide", "brain"),
+    }
+
+
+def _set_gemini_dirs(paths):
+    """Assign module-level conversation/brain paths from a _gemini_data_paths() dict."""
+    global LEGACY_CONVERSATIONS_DIR, BACKUP_CONVERSATIONS_DIR, NEW_CONVERSATIONS_DIR
+    global LEGACY_BRAIN_DIR, BACKUP_BRAIN_DIR, NEW_BRAIN_DIR
+    global CONVERSATIONS_DIR, BRAIN_DIR
+    global CONV_DIR_PRIORITY, BRAIN_DIR_PRIORITY
+
+    LEGACY_CONVERSATIONS_DIR = paths["legacy_conv"]
+    BACKUP_CONVERSATIONS_DIR = paths["backup_conv"]
+    NEW_CONVERSATIONS_DIR = paths["new_conv"]
+    LEGACY_BRAIN_DIR = paths["legacy_brain"]
+    BACKUP_BRAIN_DIR = paths["backup_brain"]
+    NEW_BRAIN_DIR = paths["new_brain"]
+    CONVERSATIONS_DIR = _first_existing(NEW_CONVERSATIONS_DIR, LEGACY_CONVERSATIONS_DIR)
+    BRAIN_DIR = _first_existing(NEW_BRAIN_DIR, LEGACY_BRAIN_DIR)
+    CONV_DIR_PRIORITY = (
+        ("new (antigravity-ide)", NEW_CONVERSATIONS_DIR),
+        ("old (antigravity)", LEGACY_CONVERSATIONS_DIR),
+        ("backup (antigravity-backup)", BACKUP_CONVERSATIONS_DIR),
+    )
+    BRAIN_DIR_PRIORITY = (
+        NEW_BRAIN_DIR,
+        LEGACY_BRAIN_DIR,
+        BACKUP_BRAIN_DIR,
+    )
+
+
 if _SYSTEM == "Windows":
     _appdata = os.path.expandvars(r"%APPDATA%")
     _profile = os.path.expandvars(r"%USERPROFILE%")
+    _gemini = os.path.join(_profile, ".gemini")
 
     DB_PATH = _first_existing(
         os.path.join(_appdata, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
         os.path.join(_appdata, "antigravity", "User", "globalStorage", "state.vscdb"),
     )
-    CONVERSATIONS_DIR = _first_existing(
-        os.path.join(_profile, ".gemini", "antigravity", "conversations"),
-    )
-    BRAIN_DIR = _first_existing(
-        os.path.join(_profile, ".gemini", "antigravity", "brain"),
-    )
+    _paths = _gemini_data_paths(_gemini)
+    _set_gemini_dirs(_paths)
     WORKSPACE_STORAGE_DIR = _first_existing(
         os.path.join(_appdata, "Antigravity IDE", "User", "workspaceStorage"),
         os.path.join(_appdata, "antigravity", "User", "workspaceStorage"),
@@ -159,6 +202,7 @@ if _SYSTEM == "Windows":
 elif _IS_WSL:
     _wsl_appdata = _get_wsl_windows_appdata()
     _home = os.path.expanduser("~")
+    _gemini = os.path.join(_home, ".gemini")
 
     if _wsl_appdata:
         DB_PATH = _first_existing(
@@ -175,26 +219,19 @@ elif _IS_WSL:
         DB_PATH = ""
         WORKSPACE_STORAGE_DIR = ""
 
-    CONVERSATIONS_DIR = _first_existing(
-        os.path.join(_home, ".gemini", "antigravity", "conversations"),
-    )
-    BRAIN_DIR = _first_existing(
-        os.path.join(_home, ".gemini", "antigravity", "brain"),
-    )
+    _paths = _gemini_data_paths(_gemini)
+    _set_gemini_dirs(_paths)
 elif _SYSTEM == "Darwin":  # macOS
     _home = os.path.expanduser("~")
     _support = os.path.join(_home, "Library", "Application Support")
+    _gemini = os.path.join(_home, ".gemini")
 
     DB_PATH = _first_existing(
         os.path.join(_support, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
         os.path.join(_support, "antigravity", "User", "globalStorage", "state.vscdb"),
     )
-    CONVERSATIONS_DIR = _first_existing(
-        os.path.join(_home, ".gemini", "antigravity", "conversations"),
-    )
-    BRAIN_DIR = _first_existing(
-        os.path.join(_home, ".gemini", "antigravity", "brain"),
-    )
+    _paths = _gemini_data_paths(_gemini)
+    _set_gemini_dirs(_paths)
     WORKSPACE_STORAGE_DIR = _first_existing(
         os.path.join(_support, "Antigravity IDE", "User", "workspaceStorage"),
         os.path.join(_support, "antigravity", "User", "workspaceStorage"),
@@ -202,17 +239,14 @@ elif _SYSTEM == "Darwin":  # macOS
 else:  # Linux and other POSIX systems
     _home = os.path.expanduser("~")
     _config = os.path.join(_home, ".config")
+    _gemini = os.path.join(_home, ".gemini")
 
     DB_PATH = _first_existing(
         os.path.join(_config, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
         os.path.join(_config, "Antigravity", "User", "globalStorage", "state.vscdb"),
     )
-    CONVERSATIONS_DIR = _first_existing(
-        os.path.join(_home, ".gemini", "antigravity", "conversations"),
-    )
-    BRAIN_DIR = _first_existing(
-        os.path.join(_home, ".gemini", "antigravity", "brain"),
-    )
+    _paths = _gemini_data_paths(_gemini)
+    _set_gemini_dirs(_paths)
     WORKSPACE_STORAGE_DIR = _first_existing(
         os.path.join(_config, "Antigravity IDE", "User", "workspaceStorage"),
         os.path.join(_config, "Antigravity", "User", "workspaceStorage"),
@@ -450,8 +484,8 @@ def infer_workspace_from_brain(conversation_id, known_ws_uris=None):
     Falls back to a heuristic depth-based approach if no known URIs match.
     Returns a filesystem path string, a remote URI string, or None.
     """
-    brain_path = os.path.join(BRAIN_DIR, conversation_id)
-    if not os.path.isdir(brain_path):
+    brain_path = find_brain_path(conversation_id)
+    if not brain_path:
         return None
 
     # Two separate patterns: local file:/// and remote vscode-remote://
@@ -756,13 +790,213 @@ def extract_existing_metadata(db_path):
     return titles, inner_blobs
 
 
+def find_brain_path(conversation_id):
+    """Return the first existing brain folder for a conversation across all locations."""
+    for brain_dir in BRAIN_DIR_PRIORITY:
+        brain_path = os.path.join(brain_dir, conversation_id)
+        if os.path.isdir(brain_path):
+            return brain_path
+    return None
+
+
+def collect_all_conversations():
+    """
+    Merge conversation .pb files from new, old, and backup folders.
+    Priority when duplicate IDs exist: new > old > backup.
+    Returns {conversation_id: {"pb_path", "source", "mtime"}}.
+    """
+    catalog = {}
+    for label, conv_dir in CONV_DIR_PRIORITY:
+        if not os.path.isdir(conv_dir):
+            continue
+        for name in os.listdir(conv_dir):
+            if not name.endswith(".pb"):
+                continue
+            cid = name[:-3]
+            if cid in catalog:
+                continue
+            path = os.path.join(conv_dir, name)
+            catalog[cid] = {
+                "pb_path": path,
+                "source": label,
+                "mtime": os.path.getmtime(path),
+            }
+    return catalog
+
+
+def count_conversations_in_dir(conv_dir):
+    """Count .pb conversation files in a directory."""
+    if not os.path.isdir(conv_dir):
+        return 0
+    return sum(1 for name in os.listdir(conv_dir) if name.endswith(".pb"))
+
+
+def _existing_pb_names(conv_dir):
+    if not os.path.isdir(conv_dir):
+        return set()
+    return {f for f in os.listdir(conv_dir) if f.endswith(".pb")}
+
+
+def _existing_brain_names(brain_dir):
+    if not os.path.isdir(brain_dir):
+        return set()
+    return {
+        name for name in os.listdir(brain_dir)
+        if os.path.isdir(os.path.join(brain_dir, name))
+    }
+
+
+def scan_legacy_migration():
+    """Find chats in old folder that are not yet in the new folder."""
+    existing_new = _existing_pb_names(NEW_CONVERSATIONS_DIR)
+    existing_new_brain = _existing_brain_names(NEW_BRAIN_DIR)
+    conv_files = []
+    brain_dirs = []
+
+    if os.path.isdir(LEGACY_CONVERSATIONS_DIR):
+        for name in os.listdir(LEGACY_CONVERSATIONS_DIR):
+            if name.endswith(".pb") and name not in existing_new:
+                conv_files.append(name)
+
+    if os.path.isdir(LEGACY_BRAIN_DIR):
+        for name in os.listdir(LEGACY_BRAIN_DIR):
+            if (os.path.isdir(os.path.join(LEGACY_BRAIN_DIR, name))
+                    and name not in existing_new_brain):
+                brain_dirs.append(name)
+
+    return conv_files, brain_dirs
+
+
+def scan_backup_restore():
+    """
+    Find chats in backup that are missing from BOTH old and new folders.
+    These are candidates for restore when a chat vanished after an upgrade.
+    """
+    existing_new = _existing_pb_names(NEW_CONVERSATIONS_DIR)
+    existing_legacy = _existing_pb_names(LEGACY_CONVERSATIONS_DIR)
+    existing_new_brain = _existing_brain_names(NEW_BRAIN_DIR)
+    existing_legacy_brain = _existing_brain_names(LEGACY_BRAIN_DIR)
+    conv_files = []
+    brain_dirs = []
+
+    if os.path.isdir(BACKUP_CONVERSATIONS_DIR):
+        for name in os.listdir(BACKUP_CONVERSATIONS_DIR):
+            if (name.endswith(".pb")
+                    and name not in existing_new
+                    and name not in existing_legacy):
+                conv_files.append(name)
+
+    if os.path.isdir(BACKUP_BRAIN_DIR):
+        for name in os.listdir(BACKUP_BRAIN_DIR):
+            if (os.path.isdir(os.path.join(BACKUP_BRAIN_DIR, name))
+                    and name not in existing_new_brain
+                    and name not in existing_legacy_brain):
+                brain_dirs.append(name)
+
+    return conv_files, brain_dirs
+
+
+def copy_conversations_and_brain(conv_dir, brain_dir, conv_files, brain_dirs):
+    """Copy missing .pb files and brain folders into the new Antigravity location."""
+    os.makedirs(NEW_CONVERSATIONS_DIR, exist_ok=True)
+    os.makedirs(NEW_BRAIN_DIR, exist_ok=True)
+
+    copied_conv = 0
+    for name in conv_files:
+        src = os.path.join(conv_dir, name)
+        dst = os.path.join(NEW_CONVERSATIONS_DIR, name)
+        if os.path.exists(dst):
+            continue
+        shutil.copy2(src, dst)
+        copied_conv += 1
+
+    copied_brain = 0
+    for name in brain_dirs:
+        src = os.path.join(brain_dir, name)
+        dst = os.path.join(NEW_BRAIN_DIR, name)
+        if os.path.exists(dst):
+            continue
+        shutil.copytree(src, dst)
+        copied_brain += 1
+
+    return copied_conv, copied_brain
+
+
+def run_legacy_migration():
+    conv_files, brain_dirs = scan_legacy_migration()
+    return copy_conversations_and_brain(
+        LEGACY_CONVERSATIONS_DIR, LEGACY_BRAIN_DIR, conv_files, brain_dirs
+    )
+
+
+def run_backup_restore():
+    conv_files, brain_dirs = scan_backup_restore()
+    return copy_conversations_and_brain(
+        BACKUP_CONVERSATIONS_DIR, BACKUP_BRAIN_DIR, conv_files, brain_dirs
+    )
+
+
+def prompt_action_menu(catalog, legacy_conv, legacy_brain, restore_conv, restore_brain):
+    """
+    Main action menu. Returns one of: rebuild, migrate, restore, full.
+    """
+    print("  " + "=" * 58)
+    print("  CHOOSE AN ACTION")
+    print("  " + "=" * 58)
+    print("  Scanned conversation folders:")
+    for label, conv_dir in CONV_DIR_PRIORITY:
+        print(f"    {label:28s} {count_conversations_in_dir(conv_dir):4d} file(s)")
+    print(f"    {'merged unique total':28s} {len(catalog):4d} chat(s)")
+    print()
+
+    if legacy_conv or legacy_brain:
+        print(f"  Old → new migration available: {legacy_conv} chat(s), {legacy_brain} brain folder(s)")
+    if restore_conv or restore_brain:
+        print(f"  Backup restore available:        {restore_conv} chat(s), {restore_brain} brain folder(s)")
+    if legacy_conv or legacy_brain or restore_conv or restore_brain:
+        print()
+
+    print("  1. Rebuild index from all folders (new + old + backup)")
+    print("  2. Migrate missing chats from old → new, then rebuild")
+    print("  3. Restore missing chats from backup → new, then rebuild")
+    if (legacy_conv or legacy_brain) or (restore_conv or restore_brain):
+        print("  4. Full recovery: migrate old + restore backup + rebuild (recommended)")
+    print()
+    print("  Press Enter or 1-4 to choose")
+    print()
+
+    has_full = bool((legacy_conv or legacy_brain) or (restore_conv or restore_brain))
+    valid = {"1", "2", "3", ""}
+    if has_full:
+        valid.add("4")
+    while True:
+        choice = input("  Your choice: ").strip()
+        if choice not in valid:
+            print("  Invalid choice. Press Enter, 1, 2, 3, or 4.")
+            continue
+        if choice in ("", "1"):
+            return "rebuild"
+        if choice == "2":
+            if not legacy_conv and not legacy_brain:
+                print("  Nothing to migrate from the old folder.")
+                print()
+            return "migrate"
+        if choice == "3":
+            if not restore_conv and not restore_brain:
+                print("  Nothing to restore from backup.")
+                print()
+            return "restore"
+        if choice == "4":
+            return "full"
+
+
 def get_title_from_brain(conversation_id):
     """
     Try to extract a title from brain artifact .md files.
     Returns the first markdown heading found, or None.
     """
-    brain_path = os.path.join(BRAIN_DIR, conversation_id)
-    if not os.path.isdir(brain_path):
+    brain_path = find_brain_path(conversation_id)
+    if not brain_path:
         return None
 
     for item in sorted(os.listdir(brain_path)):
@@ -780,7 +1014,7 @@ def get_title_from_brain(conversation_id):
     return None
 
 
-def resolve_title(conversation_id, existing_titles):
+def resolve_title(conversation_id, existing_titles, pb_path=None):
     """
     Determine the best title for a conversation. Priority:
       1. Existing title from database (canonical Antigravity title)
@@ -797,9 +1031,8 @@ def resolve_title(conversation_id, existing_titles):
     if brain_title:
         return brain_title, "brain"
 
-    conv_file = os.path.join(CONVERSATIONS_DIR, f"{conversation_id}.pb")
-    if os.path.exists(conv_file):
-        mod_time = time.strftime("%b %d", time.localtime(os.path.getmtime(conv_file)))
+    if pb_path and os.path.exists(pb_path):
+        mod_time = time.strftime("%b %d", time.localtime(os.path.getmtime(pb_path)))
         return f"Conversation ({mod_time}) {conversation_id[:8]}", "fallback"
 
     return f"Conversation {conversation_id[:8]}", "fallback"
@@ -861,7 +1094,7 @@ def build_trajectory_entry(conversation_id, title, existing_inner_data=None,
 def main():
     print()
     print("=" * 62)
-    print("   Antigravity Conversation Fix  v1.05")
+    print("   Antigravity Conversation Fix  v1.09")
     print("   Rebuilds your conversation index — sorted by date")
     print("=" * 62)
     print()
@@ -933,28 +1166,48 @@ def main():
         input("\n  Press Enter to close...")
         return 1
 
-    if not os.path.isdir(CONVERSATIONS_DIR):
-        print(f"  ERROR: Conversations directory not found at:")
-        print(f"    {CONVERSATIONS_DIR}")
-        input("\n  Press Enter to close...")
-        return 1
+    # ── Choose action: rebuild / migrate / restore ──────────────────────────
 
-    # ── Discover conversations ──────────────────────────────────────────────
+    global CONVERSATIONS_DIR, BRAIN_DIR
 
-    conv_files = [f for f in os.listdir(CONVERSATIONS_DIR) if f.endswith('.pb')]
-
-    if not conv_files:
-        print("  No conversations found on disk. Nothing to fix.")
+    catalog = collect_all_conversations()
+    if not catalog:
+        print("  No conversations found in new, old, or backup folders.")
         input("\n  Press Enter to close...")
         return 0
 
-    conv_files.sort(
-        key=lambda f: os.path.getmtime(os.path.join(CONVERSATIONS_DIR, f)),
-        reverse=True
+    legacy_conv, legacy_brain = scan_legacy_migration()
+    restore_conv, restore_brain = scan_backup_restore()
+    action = prompt_action_menu(
+        catalog, len(legacy_conv), len(legacy_brain), len(restore_conv), len(restore_brain)
     )
-    conversation_ids = [f[:-3] for f in conv_files]
 
-    print(f"  Found {len(conversation_ids)} conversations on disk")
+    if action in ("migrate", "full"):
+        print("  Migrating from old folder...")
+        copied_conv, copied_brain = run_legacy_migration()
+        print(f"  Copied {copied_conv} conversation file(s), {copied_brain} brain folder(s)")
+        print()
+
+    if action in ("restore", "full"):
+        print("  Restoring from backup folder...")
+        copied_conv, copied_brain = run_backup_restore()
+        print(f"  Copied {copied_conv} conversation file(s), {copied_brain} brain folder(s)")
+        print()
+
+    if action in ("migrate", "restore", "full"):
+        CONVERSATIONS_DIR = NEW_CONVERSATIONS_DIR
+        BRAIN_DIR = NEW_BRAIN_DIR
+        catalog = collect_all_conversations()
+
+    # ── Discover conversations ──────────────────────────────────────────────
+
+    conversation_ids = sorted(
+        catalog.keys(),
+        key=lambda cid: catalog[cid]["mtime"],
+        reverse=True,
+    )
+
+    print(f"  Indexing {len(conversation_ids)} conversation(s) from all folders")
     print()
 
     # ── Preserve existing metadata ──────────────────────────────────────────
@@ -977,24 +1230,27 @@ def main():
     markers = {"brain": "+", "preserved": "~", "fallback": "?"}
 
     for i, cid in enumerate(conversation_ids, 1):
-        title, source = resolve_title(cid, existing_titles)
+        entry = catalog[cid]
+        title, source = resolve_title(cid, existing_titles, entry["pb_path"])
         inner_data = existing_inner_blobs.get(cid)
         has_ws = bool(inner_data and extract_workspace_hint(inner_data))
-        resolved.append((cid, title, source, inner_data, has_ws))
+        resolved.append((cid, title, source, inner_data, has_ws, entry))
         stats[source] += 1
         marker = markers[source]
         ws_flag = " [WS]" if has_ws else ""
-        print(f"    [{i:3d}] {marker} {title[:50]}{ws_flag}")
+        src_flag = f" [{entry['source'].split()[0]}]" if entry["source"] != "new (antigravity-ide)" else ""
+        print(f"    [{i:3d}] {marker} {title[:45]}{ws_flag}{src_flag}")
 
     print("  " + "-" * 58)
     print(f"  Legend: [+] brain  [~] preserved  [?] fallback  [WS] workspace")
+    print(f"          [old]/[backup] = chat loaded from non-new folder")
     print(f"  Totals: {stats['brain']} brain, {stats['preserved']} preserved, {stats['fallback']} fallback")
     print()
 
     # ── Workspace assignment ───────────────────────────────────────────────
 
     unmapped = [(i, cid, title)
-                for i, (cid, title, _, inner_data, has_ws) in enumerate(resolved, 1)
+                for i, (cid, title, _, inner_data, has_ws, _) in enumerate(resolved, 1)
                 if not has_ws]
 
     ws_assignments = {}  # cid -> folder_path
@@ -1016,7 +1272,7 @@ def main():
         choice = input("  Your choice: ").strip()
 
         # Auto-infer from brain artifacts (both options do this)
-        if os.path.isdir(BRAIN_DIR):
+        if unmapped:
             print()
             print("  Auto-assigning workspaces from brain artifacts...")
             auto_count = 0
@@ -1052,13 +1308,12 @@ def main():
     ws_total = 0
     ts_injected = 0
 
-    for cid, title, source, inner_data, has_ws in resolved:
+    for cid, title, source, inner_data, has_ws, entry in resolved:
         ws_path = ws_assignments.get(cid)
-        pb_path = os.path.join(CONVERSATIONS_DIR, f"{cid}.pb")
-        pb_mtime = os.path.getmtime(pb_path) if os.path.exists(pb_path) else None
+        pb_mtime = entry["mtime"]
 
-        entry = build_trajectory_entry(cid, title, inner_data, ws_path, pb_mtime)
-        result_bytes += encode_length_delimited(1, entry)
+        entry_bytes = build_trajectory_entry(cid, title, inner_data, ws_path, pb_mtime)
+        result_bytes += encode_length_delimited(1, entry_bytes)
 
         if has_ws or ws_path:
             ws_total += 1
