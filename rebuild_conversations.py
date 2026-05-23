@@ -138,15 +138,21 @@ def _first_existing(*candidates):
     return candidates[0]
 
 
+def _existing_paths(*candidates):
+    """Return all candidate paths that exist on disk, preserving order."""
+    return [p for p in candidates if p and os.path.exists(p)]
+
+
 if _SYSTEM == "Windows":
     _appdata = os.path.expandvars(r"%APPDATA%")
     _profile = os.path.expandvars(r"%USERPROFILE%")
     _gemini = os.path.join(_profile, ".gemini")
 
-    DB_PATH = _first_existing(
-        os.path.join(_appdata, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
+    DB_PATH_CANDIDATES = (
         os.path.join(_appdata, "antigravity", "User", "globalStorage", "state.vscdb"),
+        os.path.join(_appdata, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
     )
+    DB_PATH = _first_existing(*DB_PATH_CANDIDATES)
     CONVERSATIONS_DIR = _first_existing(
         os.path.join(_gemini, "antigravity-ide", "conversations"),
         os.path.join(_gemini, "antigravity", "conversations"),
@@ -160,13 +166,13 @@ if _SYSTEM == "Windows":
         os.path.join(_appdata, "antigravity", "User", "workspaceStorage"),
     )
     _ALL_CONV_DIRS = [
-        os.path.join(_gemini, "antigravity-ide", "conversations"),
         os.path.join(_gemini, "antigravity", "conversations"),
+        os.path.join(_gemini, "antigravity-ide", "conversations"),
         os.path.join(_gemini, "antigravity-backup", "conversations"),
     ]
     _ALL_BRAIN_DIRS = [
-        os.path.join(_gemini, "antigravity-ide", "brain"),
         os.path.join(_gemini, "antigravity", "brain"),
+        os.path.join(_gemini, "antigravity-ide", "brain"),
         os.path.join(_gemini, "antigravity-backup", "brain"),
     ]
 elif _IS_WSL:
@@ -174,17 +180,19 @@ elif _IS_WSL:
     _home = os.path.expanduser("~")
 
     if _wsl_appdata:
-        DB_PATH = _first_existing(
-            os.path.join(_wsl_appdata, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
+        DB_PATH_CANDIDATES = (
             os.path.join(_wsl_appdata, "antigravity", "User", "globalStorage", "state.vscdb"),
             os.path.join(_wsl_appdata, "Antigravity", "User", "globalStorage", "state.vscdb"),
+            os.path.join(_wsl_appdata, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
         )
+        DB_PATH = _first_existing(*DB_PATH_CANDIDATES)
         WORKSPACE_STORAGE_DIR = _first_existing(
             os.path.join(_wsl_appdata, "Antigravity IDE", "User", "workspaceStorage"),
             os.path.join(_wsl_appdata, "antigravity", "User", "workspaceStorage"),
             os.path.join(_wsl_appdata, "Antigravity", "User", "workspaceStorage"),
         )
     else:
+        DB_PATH_CANDIDATES = ()
         DB_PATH = ""
         WORKSPACE_STORAGE_DIR = ""
 
@@ -198,23 +206,24 @@ elif _IS_WSL:
     )
     _gemini_wsl = os.path.join(_home, ".gemini")
     _ALL_CONV_DIRS = [
-        os.path.join(_gemini_wsl, "antigravity-ide", "conversations"),
         os.path.join(_gemini_wsl, "antigravity", "conversations"),
+        os.path.join(_gemini_wsl, "antigravity-ide", "conversations"),
         os.path.join(_gemini_wsl, "antigravity-backup", "conversations"),
     ]
     _ALL_BRAIN_DIRS = [
-        os.path.join(_gemini_wsl, "antigravity-ide", "brain"),
         os.path.join(_gemini_wsl, "antigravity", "brain"),
+        os.path.join(_gemini_wsl, "antigravity-ide", "brain"),
         os.path.join(_gemini_wsl, "antigravity-backup", "brain"),
     ]
 elif _SYSTEM == "Darwin":  # macOS
     _home = os.path.expanduser("~")
     _support = os.path.join(_home, "Library", "Application Support")
 
-    DB_PATH = _first_existing(
-        os.path.join(_support, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
+    DB_PATH_CANDIDATES = (
         os.path.join(_support, "antigravity", "User", "globalStorage", "state.vscdb"),
+        os.path.join(_support, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
     )
+    DB_PATH = _first_existing(*DB_PATH_CANDIDATES)
     CONVERSATIONS_DIR = _first_existing(
         os.path.join(_home, ".gemini", "antigravity-ide", "conversations"),
         os.path.join(_home, ".gemini", "antigravity", "conversations"),
@@ -229,23 +238,24 @@ elif _SYSTEM == "Darwin":  # macOS
     )
     _gemini_mac = os.path.join(_home, ".gemini")
     _ALL_CONV_DIRS = [
-        os.path.join(_gemini_mac, "antigravity-ide", "conversations"),
         os.path.join(_gemini_mac, "antigravity", "conversations"),
+        os.path.join(_gemini_mac, "antigravity-ide", "conversations"),
         os.path.join(_gemini_mac, "antigravity-backup", "conversations"),
     ]
     _ALL_BRAIN_DIRS = [
-        os.path.join(_gemini_mac, "antigravity-ide", "brain"),
         os.path.join(_gemini_mac, "antigravity", "brain"),
+        os.path.join(_gemini_mac, "antigravity-ide", "brain"),
         os.path.join(_gemini_mac, "antigravity-backup", "brain"),
     ]
 else:  # Linux and other POSIX systems
     _home = os.path.expanduser("~")
     _config = os.path.join(_home, ".config")
 
-    DB_PATH = _first_existing(
-        os.path.join(_config, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
+    DB_PATH_CANDIDATES = (
         os.path.join(_config, "Antigravity", "User", "globalStorage", "state.vscdb"),
+        os.path.join(_config, "Antigravity IDE", "User", "globalStorage", "state.vscdb"),
     )
+    DB_PATH = _first_existing(*DB_PATH_CANDIDATES)
     CONVERSATIONS_DIR = _first_existing(
         os.path.join(_home, ".gemini", "antigravity-ide", "conversations"),
         os.path.join(_home, ".gemini", "antigravity", "conversations"),
@@ -260,16 +270,17 @@ else:  # Linux and other POSIX systems
     )
     _gemini_linux = os.path.join(_home, ".gemini")
     _ALL_CONV_DIRS = [
-        os.path.join(_gemini_linux, "antigravity-ide", "conversations"),
         os.path.join(_gemini_linux, "antigravity", "conversations"),
+        os.path.join(_gemini_linux, "antigravity-ide", "conversations"),
         os.path.join(_gemini_linux, "antigravity-backup", "conversations"),
     ]
     _ALL_BRAIN_DIRS = [
-        os.path.join(_gemini_linux, "antigravity-ide", "brain"),
         os.path.join(_gemini_linux, "antigravity", "brain"),
+        os.path.join(_gemini_linux, "antigravity-ide", "brain"),
         os.path.join(_gemini_linux, "antigravity-backup", "brain"),
     ]
 
+DB_PATHS = _existing_paths(*DB_PATH_CANDIDATES)
 BACKUP_FILENAME = "trajectorySummaries_backup.txt"
 
 
@@ -758,6 +769,59 @@ def interactive_workspace_assignment(unmapped_entries):
     return assignments
 
 
+def interactive_move_conversation(resolved):
+    """
+    Let user move one conversation to another workspace/project.
+    resolved: list of (cid, title, source, inner_data, has_ws)
+    Returns dict with one {conversation_id: folder_path}, or {}.
+    """
+    if not resolved:
+        return {}
+
+    print()
+    print("  " + "=" * 58)
+    print("  MOVE ONE CONVERSATION TO ANOTHER PROJECT")
+    print("  " + "=" * 58)
+    print("  Enter the conversation number shown above, or paste a conversation ID.")
+    print("  Press Enter to cancel.")
+    print()
+
+    by_id = {cid: (idx, title) for idx, (cid, title, _, _, _) in enumerate(resolved, 1)}
+
+    while True:
+        raw = input("  Conversation number or ID: ").strip()
+        if raw == "":
+            print("  Move canceled.")
+            print()
+            return {}
+
+        selected_cid = None
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(resolved):
+                selected_cid = resolved[idx - 1][0]
+        elif raw in by_id:
+            selected_cid = raw
+        else:
+            matches = [cid for cid in by_id if cid.startswith(raw)]
+            if len(matches) == 1:
+                selected_cid = matches[0]
+
+        if selected_cid:
+            idx, title = by_id[selected_cid]
+            print(f"    [{idx:3d}] {title[:55]}")
+            folder = _prompt_valid_folder("    New project path/URI (Enter=cancel): ")
+            if folder is None:
+                print("  Move canceled.")
+                print()
+                return {}
+            print(f"  + Will move conversation [{idx}] to selected project.")
+            print()
+            return {selected_cid: folder}
+
+        print("  x Conversation not found. Try number, full ID, or unique ID prefix.")
+
+
 # ─── Metadata Extraction ─────────────────────────────────────────────────────
 
 def extract_existing_metadata(db_path):
@@ -837,6 +901,24 @@ def extract_existing_metadata(db_path):
         pass
 
     return titles, inner_blobs
+
+
+def extract_existing_metadata_from_paths(db_paths):
+    """
+    Read metadata from all existing Antigravity databases.
+    Earlier paths win so old antigravity metadata is preferred over IDE metadata.
+    """
+    merged_titles = {}
+    merged_inner_blobs = {}
+    for db_path in db_paths:
+        titles, inner_blobs = extract_existing_metadata(db_path)
+        for cid, title in titles.items():
+            if cid not in merged_titles:
+                merged_titles[cid] = title
+        for cid, inner_blob in inner_blobs.items():
+            if cid not in merged_inner_blobs:
+                merged_inner_blobs[cid] = inner_blob
+    return merged_titles, merged_inner_blobs
 
 
 def get_title_from_brain(conversation_id):
@@ -945,6 +1027,41 @@ def build_trajectory_entry(conversation_id, title, existing_inner_data=None,
     return entry
 
 
+def write_index_to_database(db_path, encoded_value, backup_suffix):
+    """Back up and write the rebuilt trajectory index into one state.vscdb."""
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT value FROM ItemTable "
+        "WHERE key='antigravityUnifiedStateSync.trajectorySummaries'"
+    )
+    row = cur.fetchone()
+
+    backup_name = BACKUP_FILENAME if not backup_suffix else f"trajectorySummaries_backup_{backup_suffix}.txt"
+    backup_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), backup_name)
+    if row and row[0]:
+        with open(backup_path, 'w', encoding='utf-8') as f:
+            f.write(row[0])
+
+    if row:
+        cur.execute(
+            "UPDATE ItemTable SET value=? "
+            "WHERE key='antigravityUnifiedStateSync.trajectorySummaries'",
+            (encoded_value,)
+        )
+    else:
+        cur.execute(
+            "INSERT INTO ItemTable (key, value) "
+            "VALUES ('antigravityUnifiedStateSync.trajectorySummaries', ?)",
+            (encoded_value,)
+        )
+
+    conn.commit()
+    conn.close()
+    return backup_name if row and row[0] else None
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -954,31 +1071,38 @@ def main():
     print("   Rebuilds your conversation index — sorted by date")
     print("=" * 62)
     print()
+    print("  IMPORTANT: Close Antigravity completely before continuing.")
+    print("  If it is open, this fix may be overwritten when the app exits.")
+    print()
 
     # ── Check if Antigravity is running ────────────────────────────────────
 
     _ag_running = False
     if _SYSTEM == "Windows":
-        try:
-            result = subprocess.run(
-                ['tasklist', '/FI', 'IMAGENAME eq antigravity.exe'],
-                capture_output=True, text=True, creationflags=0x08000000
-            )
-            if 'antigravity.exe' in result.stdout.lower():
-                _ag_running = True
-        except Exception:
-            pass
+        for exe_name in ("antigravity.exe", "antigravity ide.exe"):
+            try:
+                result = subprocess.run(
+                    ['tasklist', '/FI', f'IMAGENAME eq {exe_name}'],
+                    capture_output=True, text=True, creationflags=0x08000000
+                )
+                if exe_name in result.stdout.lower():
+                    _ag_running = True
+                    break
+            except Exception:
+                pass
     elif _IS_WSL:
         # Check the Windows host process first, then Linux processes
-        try:
-            result = subprocess.run(
-                ['tasklist.exe', '/FI', 'IMAGENAME eq antigravity.exe'],
-                capture_output=True, text=True
-            )
-            if 'antigravity.exe' in result.stdout.lower():
-                _ag_running = True
-        except Exception:
-            pass
+        for exe_name in ("antigravity.exe", "antigravity ide.exe"):
+            try:
+                result = subprocess.run(
+                    ['tasklist.exe', '/FI', f'IMAGENAME eq {exe_name}'],
+                    capture_output=True, text=True
+                )
+                if exe_name in result.stdout.lower():
+                    _ag_running = True
+                    break
+            except Exception:
+                pass
         if not _ag_running:
             try:
                 result = subprocess.run(
@@ -1014,9 +1138,10 @@ def main():
 
     # ── Validate paths ──────────────────────────────────────────────────────
 
-    if not os.path.exists(DB_PATH):
-        print(f"  ERROR: Database not found at:")
-        print(f"    {DB_PATH}")
+    if not DB_PATHS:
+        print(f"  ERROR: Database not found at any known Antigravity location.")
+        for candidate in DB_PATH_CANDIDATES:
+            print(f"    {candidate}")
         print()
         print("  Make sure Antigravity has been installed and opened at least once.")
         input("\n  Press Enter to close...")
@@ -1052,7 +1177,10 @@ def main():
     # ── Preserve existing metadata ──────────────────────────────────────────
 
     print("  Reading existing metadata from database...")
-    existing_titles, existing_inner_blobs = extract_existing_metadata(DB_PATH)
+    for db_path in DB_PATHS:
+        app_name = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(db_path))))
+        print(f"    {app_name}: {db_path}")
+    existing_titles, existing_inner_blobs = extract_existing_metadata_from_paths(DB_PATHS)
     ws_count = sum(1 for v in existing_inner_blobs.values()
                    if extract_workspace_hint(v))
     print(f"  Found {len(existing_titles)} existing titles to preserve")
@@ -1099,42 +1227,56 @@ def main():
         print("  No workspaceStorage found — using fallback heuristic")
     print()
 
+    print("  Workspace options:")
     if unmapped:
         print(f"  {len(unmapped)} conversation(s) have no workspace assigned.")
         print()
         print("  Press Enter or 1: Auto-assign workspaces (recommended)")
         print("  Press 2:          Auto-assign + manually assign the rest")
+        print("  Press 3:          Move one conversation to another project")
         print()
         choice = input("  Your choice: ").strip()
 
-        # Auto-infer from brain artifacts (both options do this)
-        print()
-        print("  Auto-assigning workspaces from brain artifacts...")
-        auto_count = 0
-        for idx, cid, title in unmapped:
-            inferred = infer_workspace_from_brain(cid, known_ws_uris)
-            if inferred and (_is_remote_uri(inferred) or os.path.isdir(inferred)):
-                ws_assignments[cid] = inferred
-                auto_count += 1
-                display = os.path.basename(inferred) if not _is_remote_uri(inferred) else inferred
-                print(f"    [{idx:3d}] -> {display}")
-        if auto_count:
-            print(f"  Auto-assigned {auto_count} workspace(s)")
+        if choice == '3':
+            ws_assignments.update(interactive_move_conversation(resolved))
         else:
-            print("  No workspaces could be auto-detected.")
-        print()
-
-        # Option 2: also do manual assignment for the rest
-        if choice == '2':
-            still_unmapped = [(idx, cid, title)
-                              for idx, cid, title in unmapped
-                              if cid not in ws_assignments]
-            if still_unmapped:
-                user_assignments = interactive_workspace_assignment(still_unmapped)
-                ws_assignments.update(user_assignments)
+            # Auto-infer from brain artifacts (options 1 and 2 do this)
+            print()
+            print("  Auto-assigning workspaces from brain artifacts...")
+            auto_count = 0
+            for idx, cid, title in unmapped:
+                inferred = infer_workspace_from_brain(cid, known_ws_uris)
+                if inferred and (_is_remote_uri(inferred) or os.path.isdir(inferred)):
+                    ws_assignments[cid] = inferred
+                    auto_count += 1
+                    display = os.path.basename(inferred) if not _is_remote_uri(inferred) else inferred
+                    print(f"    [{idx:3d}] -> {display}")
+            if auto_count:
+                print(f"  Auto-assigned {auto_count} workspace(s)")
             else:
-                print("  All conversations were auto-assigned — nothing left to assign manually.")
-                print()
+                print("  No workspaces could be auto-detected.")
+            print()
+
+            # Option 2: also do manual assignment for the rest
+            if choice == '2':
+                still_unmapped = [(idx, cid, title)
+                                  for idx, cid, title in unmapped
+                                  if cid not in ws_assignments]
+                if still_unmapped:
+                    user_assignments = interactive_workspace_assignment(still_unmapped)
+                    ws_assignments.update(user_assignments)
+                else:
+                    print("  All conversations were auto-assigned — nothing left to assign manually.")
+                    print()
+    else:
+        print("  All conversations already have workspace metadata.")
+        print()
+        print("  Press Enter: Continue")
+        print("  Press 3:     Move one conversation to another project")
+        print()
+        choice = input("  Your choice: ").strip()
+        if choice == '3':
+            ws_assignments.update(interactive_move_conversation(resolved))
 
     # ── Build the new index ─────────────────────────────────────────────────
 
@@ -1159,42 +1301,18 @@ def main():
     print(f"  Workspace: {ws_total} mapped  |  Timestamps injected: {ts_injected}")
     print()
 
-    # ── Backup current data ─────────────────────────────────────────────────
-
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT value FROM ItemTable "
-        "WHERE key='antigravityUnifiedStateSync.trajectorySummaries'"
-    )
-    row = cur.fetchone()
-
-    backup_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), BACKUP_FILENAME)
-    if row and row[0]:
-        with open(backup_path, 'w', encoding='utf-8') as f:
-            f.write(row[0])
-        print(f"  Backup saved to: {BACKUP_FILENAME}")
-
     # ── Write the new index ─────────────────────────────────────────────────
 
     encoded = base64.b64encode(result_bytes).decode('utf-8')
 
-    if row:
-        cur.execute(
-            "UPDATE ItemTable SET value=? "
-            "WHERE key='antigravityUnifiedStateSync.trajectorySummaries'",
-            (encoded,)
-        )
-    else:
-        cur.execute(
-            "INSERT INTO ItemTable (key, value) "
-            "VALUES ('antigravityUnifiedStateSync.trajectorySummaries', ?)",
-            (encoded,)
-        )
-
-    conn.commit()
-    conn.close()
+    print("  Writing rebuilt index to database(s):")
+    for db_path in DB_PATHS:
+        app_name = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(db_path))))
+        suffix = re.sub(r"[^A-Za-z0-9]+", "_", app_name).strip("_").lower()
+        backup_name = write_index_to_database(db_path, encoded, suffix)
+        print(f"    {app_name}: updated")
+        if backup_name:
+            print(f"      backup: {backup_name}")
 
     # ── Done ────────────────────────────────────────────────────────────────
 
